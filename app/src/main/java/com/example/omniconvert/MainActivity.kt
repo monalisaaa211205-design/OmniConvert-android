@@ -1,6 +1,8 @@
 package com.example.omniconvert
 
+import android.content.Intent
 import android.net.Uri
+import android.os.Build
 import android.os.Bundle
 import android.widget.Toast
 import androidx.activity.ComponentActivity
@@ -9,6 +11,8 @@ import androidx.activity.compose.setContent
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -19,35 +23,80 @@ import coil.compose.AsyncImage
 import kotlinx.coroutines.launch
 
 class MainActivity : ComponentActivity() {
+
+    private val sharedUrisState = mutableStateOf<List<Uri>>(emptyList())
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        handleIncomingIntent(intent)
+
         setContent {
             MaterialTheme {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = MaterialTheme.colorScheme.background
                 ) {
-                    ConverterScreen()
+                    val sharedUris by sharedUrisState
+                    ConverterScreen(initialUris = sharedUris)
                 }
+            }
+        }
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        handleIncomingIntent(intent)
+    }
+
+    private fun handleIncomingIntent(intent: Intent?) {
+        when (intent?.action) {
+            Intent.ACTION_SEND -> {
+                val uri = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    intent.getParcelableExtra(Intent.EXTRA_STREAM, Uri::class.java)
+                } else {
+                    @Suppress("DEPRECATION")
+                    intent.getParcelableExtra<Uri>(Intent.EXTRA_STREAM)
+                }
+                sharedUrisState.value = listOfNotNull(uri)
+            }
+            Intent.ACTION_SEND_MULTIPLE -> {
+                val uris = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                    intent.getParcelableArrayListExtra(Intent.EXTRA_STREAM, Uri::class.java)
+                } else {
+                    @Suppress("DEPRECATION")
+                    intent.getParcelableArrayListExtra<Uri>(Intent.EXTRA_STREAM)
+                }
+                sharedUrisState.value = uris ?: emptyList()
             }
         }
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ConverterScreen() {
+fun ConverterScreen(initialUris: List<Uri> = emptyList()) {
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
 
-    var selectedImageUri by remember { mutableStateOf<Uri?>(null) }
+    var selectedUris by remember { mutableStateOf<List<Uri>>(initialUris) }
     var selectedFormat by remember { mutableStateOf(TargetFormat.JPEG) }
     var isProcessing by remember { mutableStateOf(false) }
+    var progressText by remember { mutableStateOf("") }
 
-    // Modern Android Photo Picker Launcher
+    LaunchedEffect(initialUris) {
+        if (initialUris.isNotEmpty()) {
+            selectedUris = initialUris
+        }
+    }
+
+    // Allows picking up to 50 images at once
     val photoPickerLauncher = rememberLauncherForActivityResult(
-        contract = ActivityResultContracts.PickVisualMedia()
-    ) { uri ->
-        selectedImageUri = uri
+        contract = ActivityResultContracts.PickMultipleVisualMedia(maxItems = 50)
+    ) { uris: List<Uri> ->
+        if (uris.isNotEmpty()) {
+            selectedUris = uris
+        }
     }
 
     Column(
@@ -58,34 +107,45 @@ fun ConverterScreen() {
         verticalArrangement = Arrangement.Center
     ) {
         Text(
-            text = "Local Image Converter",
+            text = "OmniConvert",
             style = MaterialTheme.typography.headlineMedium
         )
         Text(
-            text = "100% Offline • On-Device Processing",
+            text = "Batch Image Processor • 100% Offline",
             style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.secondary
         )
 
         Spacer(modifier = Modifier.height(24.dp))
 
-        // Image Preview Box
-        if (selectedImageUri != null) {
-            AsyncImage(
-                model = selectedImageUri,
-                contentDescription = "Selected Image",
-                modifier = Modifier
-                    .size(200.dp)
-                    .padding(8.dp)
+        // Image Preview Strip
+        if (selectedUris.isNotEmpty()) {
+            Text(
+                "${selectedUris.size} item(s) queued",
+                style = MaterialTheme.typography.labelMedium,
+                modifier = Modifier.padding(bottom = 8.dp)
             )
+            LazyRow(
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.height(140.dp)
+            ) {
+                items(selectedUris) { uri ->
+                    OutlinedCard {
+                        AsyncImage(
+                            model = uri,
+                            contentDescription = "Selected Image",
+                            modifier = Modifier.size(130.dp)
+                        )
+                    }
+                }
+            }
         } else {
             OutlinedCard(
                 modifier = Modifier
-                    .size(200.dp)
-                    .padding(8.dp)
+                    .size(width = 240.dp, height = 140.dp)
             ) {
                 Box(contentAlignment = Alignment.Center, modifier = Modifier.fillMaxSize()) {
-                    Text("No file selected", color = MaterialTheme.colorScheme.outline)
+                    Text("No files selected", color = MaterialTheme.colorScheme.outline)
                 }
             }
         }
@@ -97,16 +157,16 @@ fun ConverterScreen() {
                 PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
             )
         }) {
-            Text("Select Image")
+            Text("Select Photos (Single or Batch)")
         }
 
         Spacer(modifier = Modifier.height(20.dp))
 
-        // Target Format Selector
+        // Format selector
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            TargetFormat.values().forEach { format ->
+            TargetFormat.entries.forEach { format ->
                 FilterChip(
-                    selected = selectedFormat == format,
+                    selected = (selectedFormat == format),
                     onClick = { selectedFormat = format },
                     label = { Text(format.name) }
                 )
@@ -115,34 +175,40 @@ fun ConverterScreen() {
 
         Spacer(modifier = Modifier.height(24.dp))
 
-        // Convert Button
         Button(
-            enabled = selectedImageUri != null && !isProcessing,
+            enabled = selectedUris.isNotEmpty() && !isProcessing,
             onClick = {
-                val uri = selectedImageUri ?: return@Button
                 isProcessing = true
+                progressText = "Starting batch..."
 
                 coroutineScope.launch {
-                    val result = ImageConverter.convertAndSaveImage(
+                    val results = ImageConverter.convertMultipleImages(
                         context = context,
-                        inputUri = uri,
+                        uris = selectedUris,
                         targetFormat = selectedFormat
-                    )
+                    ) { current, total ->
+                        progressText = "Processing: $current of $total"
+                    }
 
                     isProcessing = false
-                    if (result.isSuccess) {
-                        Toast.makeText(context, "Saved to Pictures/LocalConvert!", Toast.LENGTH_LONG).show()
-                    } else {
-                        Toast.makeText(context, "Error: ${result.exceptionOrNull()?.message}", Toast.LENGTH_SHORT).show()
-                    }
+                    val successCount = results.count { it.isSuccess }
+                    Toast.makeText(
+                        context,
+                        "Saved $successCount/${selectedUris.size} to Pictures/LocalConvert",
+                        Toast.LENGTH_LONG
+                    ).show()
                 }
             },
             modifier = Modifier.fillMaxWidth()
         ) {
             if (isProcessing) {
-                CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                    Spacer(modifier = Modifier.width(10.dp))
+                    Text(progressText)
+                }
             } else {
-                Text("Convert & Save to Device")
+                Text(if (selectedUris.size > 1) "Convert All (${selectedUris.size} Images)" else "Convert & Save")
             }
         }
     }

@@ -56,4 +56,5 @@ dependencies {
 
     // Coroutines for running heavy image conversions off the UI thread
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.0")
+    implementation("androidx.exifinterface:exifinterface:1.3.7")
 }
