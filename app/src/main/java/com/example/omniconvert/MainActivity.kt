@@ -176,12 +176,26 @@ fun ConverterScreen(initialUris: List<Uri> = emptyList()) {
         Spacer(modifier = Modifier.height(24.dp))
 
         Button(
-            enabled = selectedUris.isNotEmpty() && !isProcessing,
-            onClick = {
-                isProcessing = true
-                progressText = "Starting batch..."
-
-                coroutineScope.launch {
+        enabled = selectedUris.isNotEmpty() && !isProcessing,
+        onClick = {
+            isProcessing = true
+            progressText = "Starting..."
+            coroutineScope.launch {
+                if (selectedFormat == TargetFormat.PDF) {
+                    val result = ImageConverter.compileImagesToPdf(
+                        context = context,
+                        uris = selectedUris
+                    ) { current, total ->
+                        progressText = "Rendering Page $current of $total"
+                    }
+                    isProcessing = false
+                    if (result.isSuccess) {
+                        Toast.makeText(context, "Saved PDF to Downloads/OmniConvert!", Toast.LENGTH_LONG).show()
+                    } else {
+                        val err = result.exceptionOrNull()?.message ?: "Unknown error"
+                        Toast.makeText(context, "PDF Error: $err", Toast.LENGTH_LONG).show()
+                    }
+                } else {
                     val results = ImageConverter.convertMultipleImages(
                         context = context,
                         uris = selectedUris,
@@ -189,17 +203,20 @@ fun ConverterScreen(initialUris: List<Uri> = emptyList()) {
                     ) { current, total ->
                         progressText = "Processing: $current of $total"
                     }
-
                     isProcessing = false
                     val successCount = results.count { it.isSuccess }
-                    Toast.makeText(
-                        context,
-                        "Saved $successCount/${selectedUris.size} to Pictures/LocalConvert",
-                        Toast.LENGTH_LONG
-                    ).show()
+                    val failure = results.firstOrNull { it.isFailure }?.exceptionOrNull()?.message
+                    
+                    val msg = if (successCount == selectedUris.size) {
+                        "Saved $successCount/${selectedUris.size} to Pictures/OmniConvert"
+                    } else {
+                        "Saved $successCount/${selectedUris.size}. Error: ${failure ?: "Decode/Write failed"}"
+                    }
+                    Toast.makeText(context, msg, Toast.LENGTH_LONG).show()
                 }
-            },
-            modifier = Modifier.fillMaxWidth()
+            }
+        },
+        modifier = Modifier.fillMaxWidth()
         ) {
             if (isProcessing) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
